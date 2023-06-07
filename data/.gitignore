@@ -1,2 +1,4 @@
 *
 !.gitignore
+!thermodynamic_databases/
+!thermodynamic_databases/*
