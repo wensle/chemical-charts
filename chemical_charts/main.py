@@ -4,9 +4,10 @@ import os
 from pathlib import Path
 
 import numpy as np
+import plotly.graph_objects as go
 from dotenv import load_dotenv
 
-from chemical_charts.contour_plot import ContourPlot
+from chemical_charts.contour_plot import TernaryContourPlot
 from chemical_charts.thermo_calculator import ThermoCalculator
 
 
@@ -41,8 +42,16 @@ def main():
     # use the class
     components = ["AL", "CU", "Y", "VA"]
     pressures = [101325]  # Atmospheric pressure in Pa
-    temperatures = np.linspace(573.15, 10573.15, 101)
-    output_properties = ["GM_MIX", "SM_MIX", "HM_MIX"]
+    # We use the following temperatures for our contour plots because they represent key
+    # points in the thermal behavior of the Al-Cu-Y system. 300 K approximates room
+    # temperature conditions, 550 K and 750 K represent intermediate temperatures where
+    # significant phase transformations might occur. 1000 K is a high temperature that
+    # may induce additional phase changes, while 1300 K is above the typical melting
+    # point of the system to observe the behavior of the liquid phase. The choice of
+    # these specific temperatures should be guided by specific properties of the Al-Cu-Y
+    # system and the research questions being investigated.
+    temperatures = [300, 550, 750, 1000, 1300]  # K
+    output_properties = ["GM_MIX", "SM_MIX", "HM_MIX", "HM"]
     calculator = ThermoCalculator(
         db_path, components, pressures, temperatures, output_properties
     )
@@ -54,16 +63,13 @@ def main():
     mask_dir.mkdir(parents=True, exist_ok=True)
 
     for plot_data in calculator.calculate_properties():
-        # Create a ContourPlot instance
-        contour_plot = ContourPlot()
+        xs = plot_data["xs"]
+        ys = plot_data["ys"]
+        zs = plot_data["zs"]
 
-        # Prepare data
-        coordinates, values = contour_plot.prepare_data(
-            plot_data["xs"], plot_data["ys"], plot_data["zs"]
-        )
+        coordinates, values = np.array([xs, ys, 1 - xs - ys]), zs
 
         try:
-            # Create contour plot
             title = (
                 f'{plot_data["pressure"]} Pa - '
                 f'{", ".join(plot_data["composition"])} - '
@@ -72,20 +78,28 @@ def main():
                 f'{plot_data["temperature"]:.2f} K'
             )
 
-            # Use the function
-            num_contours = optimal_contours(
-                plot_data["xs"], plot_data["ys"], plot_data["zs"]
+            # Create plots
+            plotter = TernaryContourPlot(
+                coordinates=coordinates, values=values, plot_title=title
             )
 
-            contour_plot_fig = contour_plot.create_contour_plot(
-                coordinates, values, title, num_contours
-            )
+            line_traces = plotter.create_contour_line_traces()
+            line_layout = plotter.generate_layout()
+            line_fig = go.Figure(data=line_traces, layout=line_layout)
 
             # Create mask
-            mask_fig = contour_plot.create_mask(coordinates, values, num_contours)
+            fill_traces = plotter.create_contour_fill_traces()
+            fill_layout = plotter.generate_layout(
+                show_lines=False,
+                show_ticks=False,
+                show_title=False,
+                show_pole_labels=False,
+            )
 
-            contour_plot_fig.write_image(str(contour_dir / f"{title}.png"))
-            mask_fig.write_image(str(mask_dir / f"{title}.png"))
+            fill_fig = go.Figure(data=fill_traces, layout=fill_layout)
+
+            line_fig.write_image(str(contour_dir / f"{title}.png"))
+            fill_fig.write_image(str(mask_dir / f"{title}.png"))
 
         except Exception as e:
             plot_data.pop("xs")
