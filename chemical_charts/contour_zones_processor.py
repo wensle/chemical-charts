@@ -1,26 +1,29 @@
 import csv
+from typing import List
 
 import cv2
 import numpy as np
 
+from chemical_charts.ground_truth_prompt_pipeline import GroundTruthPromptPipeline
 from chemical_charts.input_image_path_utility import InputImagePathUtility
-from chemical_charts.point_selection_strategies import CombinedPointSelectionStrategy
 
 
 class ContourZonesProcessor:
     def __init__(
         self,
         input_image_path_utility: InputImagePathUtility,
-        resolution_scaling_factor=20,
-        sampling_strategy=CombinedPointSelectionStrategy(),
+        prompt_pipeline: GroundTruthPromptPipeline,
+        num_prompt_points: int = 10,
+        resolution_scaling_factor=5,
     ) -> None:
         """
         Initialize the processor with the input image path utility, processing
         parameters, and sampling strategy.
         """
         self.path_util: InputImagePathUtility = input_image_path_utility
+        self.prompt_pipeline: GroundTruthPromptPipeline = prompt_pipeline
+        self.num_prompt_points: int = num_prompt_points
         self.resolution_scaling_factor: int = resolution_scaling_factor
-        self.sampling_strategy: CombinedPointSelectionStrategy = sampling_strategy
         self.contour_layers = self._load_and_preprocess_contour_layers()
 
     def _load_and_preprocess_contour_layers(self):
@@ -71,13 +74,6 @@ class ContourZonesProcessor:
         overlap = cv2.bitwise_and(contour_layer1, contour_layer2)
         return cv2.countNonZero(overlap) > 0
 
-    def get_sample_point_prompts(self, contour_zone_mask):
-        """
-        Generate and return prompts from a contour zone mask based on the current
-        sampling strategy.
-        """
-        return self.sampling_strategy.get_points(contour_zone_mask)
-
     def save_point_prompts(self):
         """
         Compute and save sample prompts for all ground truth masks to a CSV file.
@@ -96,7 +92,12 @@ class ContourZonesProcessor:
                     break  # Exit the loop if the mask file does not exist
                 ground_truth_mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
 
-                sample_prompts = self.get_sample_point_prompts(ground_truth_mask)
+                processed_mask = self.prompt_pipeline.process(ground_truth_mask)
+
+                sample_prompts = self.prompt_pipeline.execute_strategies(
+                    ground_truth_mask=processed_mask,
+                    num_points=self.num_prompt_points,
+                )
                 for prompt in sample_prompts:
                     csv_writer.writerow(
                         [f"ground_truth_mask_{i}.png", prompt[1], prompt[0]]
@@ -163,47 +164,156 @@ class ContourZonesProcessor:
 
             i += 1  # Increment mask index
 
-    def save_ground_truth_masks(self):
-        """
-        Save ground truth masks to the output directory.
-        """
-        if len(self.contour_layers) < 2:
-            raise ValueError("Insufficient contour layers to save ground truth masks.")
+    # def _process_contour_layers(self) -> List[np.ndarray]:
+    #     """
+    #     Processes contour layers to generate masks. Overlapping layers are processed
+    #     into a single mask representing the change, while non-overlapping layers each
+    #     generate an individual mask. The first mask layer is always preserved.
 
-        mask_index = 1
-        for i in range(1, len(self.contour_layers)):
-            contour_layer1 = self.contour_layers[i - 1]
-            contour_layer2 = self.contour_layers[i]
+    #     Returns:
+    #         masks: A list of processed mask layers in numpy.ndarray format.
+    #     """
 
-            if not all(
-                isinstance(layer, np.ndarray)
-                for layer in (contour_layer1, contour_layer2)
+    #     # Initialize list to store masks
+    #     masks = []
+
+    #     # Loop through each contour layer
+    #     for i in range(len(self.contour_layers)):
+    #         # Get the current and previous contour layers
+    #         contour_layer1 = self.contour_layers[i - 1]
+    #         contour_layer2 = self.contour_layers[i]
+
+    #         is_last_layer = i == len(self.contour_layers) - 1
+    #         is_2nd_to_last_layer = i == len(self.contour_layers) - 2
+
+    #         # Check if current and previous layers overlap
+    #         if self.get_overlap(contour_layer1, contour_layer2):
+    #             # If overlap, calculate the change mask
+    #             change_mask = self.get_change_mask(contour_layer1, contour_layer2)
+    #             # If change mask is not all zeros, or it's the last contour layer, add
+    #             # it to masks
+    #             is_empty_mask = np.count_nonzero(change_mask) == 0
+    #             if not is_empty_mask or is_last_layer:
+    #                 masks.append(change_mask)
+    #         else:
+    #             if is_last_layer:
+    #                 # If it's the last contour layer and no overlap with previous, add
+    #                 # it to masks
+    #                 masks.append(contour_layer2)
+    #             else:
+    #                 # If no overlap, add both layers as separate masks
+    #                 masks.extend([contour_layer1, contour_layer2])
+
+    #     return masks
+
+    def _process_contour_layers(self) -> List[np.ndarray]:
+        """
+        Processes contour layers to generate masks. Overlapping layers are processed
+        into a single mask representing the change, while non-overlapping layers each
+        generate an individual mask. The first mask layer is always preserved.
+
+        Returns:
+            masks: A list of processed mask layers in numpy.ndarray format.
+        """
+
+        filtered_layer = []
+
+        # Loop through each contour layer
+        for contour_layer in self.contour_layers:
+            # Check if the contour layer is already encountered
+            if not any(
+                np.array_equal(contour_layer, layer) for layer in filtered_layer
             ):
-                raise TypeError("Contour layers must be numpy arrays.")
+                # Add the contour layer to the encountered list
+                filtered_layer.append(contour_layer)
 
-            if self.get_overlap(contour_layer1, contour_layer2):
+        # Initialize list to store masks
+        masks = []
+
+        # Placeholder for the change mask between overlapping layers
+        change_mask = None
+
+        # Loop through each contour layer
+        for i in range(len(filtered_layer)):
+            # Get the current and previous contour layers
+            contour_layer1 = filtered_layer[i - 1] if i > 0 else None
+            contour_layer2 = filtered_layer[i]
+
+            is_last_layer = i == len(filtered_layer) - 1
+
+            if change_mask is not None:
+                # If a change mask from previous overlapping layers exists
+                if not self.get_overlap(change_mask, contour_layer2):
+                    # If current layer doesn't overlap with the change mask,
+                    # append the change mask to the list and reset it
+                    masks.append(change_mask)
+                    change_mask = None
+
+            # Check if current and previous layers overlap
+            if i == 0:
+                pass  # Skip the first layer
+            elif i > 0 and self.get_overlap(contour_layer1, contour_layer2):
+                # If overlap, calculate the change mask
                 change_mask = self.get_change_mask(contour_layer1, contour_layer2)
-                mask_path = self.path_util.get_ground_truth_mask_path(mask_index)
-
-                try:
-                    cv2.imwrite(str(mask_path), change_mask)
-                except Exception as e:
-                    raise RuntimeError(
-                        "Error occurred while saving change mask: " + str(e)
-                    )
-                mask_index += 1
+                if np.count_nonzero(change_mask) == 0:
+                    # If change mask is all zeros, reset it
+                    change_mask = None
             else:
-                masks = [contour_layer1, contour_layer2]
+                # If no overlap with previous
+                if change_mask is None:
+                    # If no change mask exists, append the previous layer
+                    masks.append(contour_layer1)
+                masks.append(contour_layer2)
 
-                for mask in masks:
-                    mask_path = self.path_util.get_ground_truth_mask_path(mask_index)
-                    try:
-                        cv2.imwrite(str(mask_path), mask)
-                    except Exception as e:
-                        raise RuntimeError(
-                            "Error occurred while saving contour layer mask: " + str(e)
-                        )
-                    mask_index += 1
+            if is_last_layer:
+                if change_mask is not None:
+                    # If it's the last contour layer and a change mask exists, append it
+                    masks.append(change_mask)
+                    masks.append(contour_layer2)
+
+        return masks
+
+    def _save_masks(self, masks: List[np.ndarray]) -> None:
+        """
+        Saves given masks as image files.
+
+        Args:
+            masks: List of masks in numpy.ndarray format to be saved.
+        """
+        mask_index = 1
+        # Loop through each mask
+        for mask in masks:
+            # If mask is not all zeros (empty), save it as an image file
+            if np.count_nonzero(mask) != 0:
+                mask_path = self.path_util.get_ground_truth_mask_path(mask_index)
+                cv2.imwrite(str(mask_path), mask)
+                mask_index += 1
+
+    def save_ground_truth_masks(self) -> None:
+        """
+        Processes the contour layers into masks, checks for overlap between the first
+        and last masks, calculates a change mask if overlap exists, and finally saves
+        all masks as image files.
+        """
+        # Process contour layers into masks
+        masks = self._process_contour_layers()
+
+        # After all masks are processed
+        if len(masks) > 1:
+            # Get the first and last masks
+            first_mask = masks[0]
+            last_mask = masks[-1]
+
+            # Check if the last mask is a region within the first mask (i.e. they
+            # overlap)
+            if self.get_overlap(first_mask, last_mask):
+                # Calculate the change mask and replace the first mask with the change
+                # mask
+                change_mask = self.get_change_mask(first_mask, last_mask)
+                masks[0] = change_mask
+
+        # Now save the masks
+        self._save_masks(masks)
 
 
 if __name__ == "__main__":

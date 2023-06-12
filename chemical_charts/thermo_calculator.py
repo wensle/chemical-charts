@@ -57,7 +57,7 @@ class ThermoCalculator:
             combinations.extend(itertools.combinations(elements, r))
         return [list(comb) for comb in combinations]
 
-    def calculate_properties(self):
+    def calculate_properties(self, phases: List[str] = None):
         """Calculates thermodynamic properties for all combinations of components.
 
         Yields:
@@ -67,6 +67,10 @@ class ThermoCalculator:
         for combo in self.component_combos:
             species_obj_set = unpack_components(self.dbf, combo)
             list_of_possible_phases = filter_phases(self.dbf, species_obj_set)
+            if phases is not None:
+                list_of_possible_phases = [
+                    phase for phase in list_of_possible_phases if phase in phases
+                ]
             for phase in list_of_possible_phases:
                 yield from self.process_phase(species_obj_set, phase)
 
