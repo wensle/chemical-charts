@@ -7,3 +7,4 @@ launch.json
 test_synthetic_data*
 input_image1
 dataset*
+**/*.zip
