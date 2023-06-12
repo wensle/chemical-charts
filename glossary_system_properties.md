@@ -37,5 +37,3 @@ For authoritative and up-to-date definitions, always refer to the documentation 
 `pycalphad` is a Python library for designing and manipulating thermodynamic models and calculating thermodynamic properties. It does not directly use some of the terms listed above, but it does provide robust functionality for calculating thermodynamic properties across phases and compositions, given an appropriate thermodynamic model.
 
 To get started with `pycalphad`, refer to the official [pycalphad documentation](http://pycalphad.org/docs/latest/).
-
-**Please note**: The capabilities of `pycalphad` may have expanded since the last update in 2021. Always refer to the latest `pycalphad` documentation for accurate and up-to-date information.
